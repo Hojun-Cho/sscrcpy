@@ -52,6 +52,8 @@ nonisolated struct Server {
     /// `adb shell` running the server.
     var process: Process
     var video: Int32
+    /// Input to the device, and the device's messages back.
+    var control: Int32
     var deviceName: String
 
     /// Pushes and starts the server, then waits for it to connect through `adb reverse`.
@@ -76,7 +78,7 @@ nonisolated struct Server {
         var arguments = [
             "-s", adb.serial, "shell", "CLASSPATH=\(devicePath)", "app_process", "/",
             "com.genymobile.scrcpy.Server", version, "scid=\(scid)", "log_level=info",
-            "video_bit_rate=\(options.videoBitRate)", "audio=false", "control=false",
+            "video_bit_rate=\(options.videoBitRate)", "audio=false",
         ]
         if options.maxSize > 0 { arguments.append("max_size=\(options.maxSize)") }
         if options.maxFps > 0 { arguments.append("max_fps=\(options.maxFps)") }
@@ -87,7 +89,17 @@ nonisolated struct Server {
         try process.run()
 
         do {
+            // The server connects its sockets in this order, then names the device on the first.
             let video = try accept(listener, from: process)
+            let control = try accept(listener, from: process)
+            var on: Int32 = 1
+            let size = socklen_t(MemoryLayout<Int32>.size)
+            // Input goes out in small writes that must not wait for more (Nagle), and a write
+            // after the device is gone must fail instead of raising SIGPIPE.
+            guard setsockopt(control, IPPROTO_TCP, TCP_NODELAY, &on, size) == 0,
+                  setsockopt(control, SOL_SOCKET, SO_NOSIGPIPE, &on, size) == 0 else {
+                throw Failure.system("setsockopt")
+            }
             var name = [UInt8](repeating: 0, count: 64)
             guard name.withUnsafeMutableBytes({ receive(video, $0) }) else {
                 throw Failure("could not read the device name")
@@ -95,6 +107,7 @@ nonisolated struct Server {
             return Server(
                 process: process,
                 video: video,
+                control: control,
                 deviceName: String(decoding: name.prefix { $0 != 0 }, as: UTF8.self)
             )
         } catch {
@@ -103,11 +116,12 @@ nonisolated struct Server {
         }
     }
 
-    /// Disconnects and ends adb, which ends the server even when it is not writing (static
-    /// screen, device asleep) and so has not noticed the closed socket. However the server
-    /// ends, its separate cleanup process restores the device settings.
+    /// Disconnects, which ends the server once the closed control socket reaches it, and ends
+    /// adb at once instead of leaving it running until then. However the server ends, its
+    /// separate cleanup process restores the device settings.
     func stop() {
         shutdown(video, SHUT_RDWR)
+        shutdown(control, SHUT_RDWR)
         if process.isRunning { process.terminate() }
     }
 }
@@ -159,6 +173,22 @@ nonisolated func receive(_ fd: Int32, _ buffer: UnsafeMutableRawBufferPointer) -
     var done = 0
     while done < buffer.count {
         let n = recv(fd, buffer.baseAddress! + done, buffer.count - done, MSG_WAITALL)
+        if n > 0 {
+            done += n
+        } else if n < 0, errno == EINTR {
+            continue
+        } else {
+            return false
+        }
+    }
+    return true
+}
+
+/// Writes all of `buffer` to the socket. Returns false if the connection fails first.
+nonisolated func sendAll(_ fd: Int32, _ buffer: UnsafeRawBufferPointer) -> Bool {
+    var done = 0
+    while done < buffer.count {
+        let n = send(fd, buffer.baseAddress! + done, buffer.count - done, 0)
         if n > 0 {
             done += n
         } else if n < 0, errno == EINTR {
