@@ -11,6 +11,7 @@ A macOS menu bar app for mirroring Android phones. It runs [scrcpy](https://gith
 
 ```sh
 brew tap Hojun-Cho/sscrcpy https://github.com/Hojun-Cho/sscrcpy
+brew trust --cask hojun-cho/sscrcpy/sscrcpy   # Homebrew 7 loads other taps' casks only once trusted
 brew install --cask sscrcpy
 ```
 
