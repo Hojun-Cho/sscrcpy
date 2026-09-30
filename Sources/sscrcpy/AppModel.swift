@@ -95,7 +95,8 @@ import Observation
             session.stop()
             return
         }
-        guard let tools else { return }
+        // Quitting waits for the clients to exit, then kills the adb server.
+        guard !quitting, let tools else { return }
         deviceErrors[serial] = nil
         do {
             let arguments = ["--serial=\(serial)", "--window-title=\(name(of: device))"]
@@ -119,6 +120,13 @@ import Observation
         // starting the server.
         pollTask?.cancel()
         await pollTask?.value
+        // A client that turned its phone's screen off puts the phone in order through the adb
+        // server before it exits, which takes seconds: killing the server first would cut it
+        // off. The bound is for a client that never exits.
+        let deadline = ContinuousClock.now + .seconds(60)
+        while !sessions.isEmpty, ContinuousClock.now < deadline {
+            try? await Task.sleep(for: .milliseconds(100))
+        }
         guard startedADBServer, let tools else { return }
         do {
             try await ADB(tools: tools).killServer()

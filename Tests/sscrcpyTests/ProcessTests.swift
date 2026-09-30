@@ -269,6 +269,30 @@ private func mirror(scrcpy: String, stopAfter: Duration? = nil) async throws -> 
         #expect(Array(log.split(separator: "\n").dropFirst()) == ["devices -l", "connect 10.0.0.9:5555", "kill-server"])
     }
 
+    @Test func quitKillsTheServerOnlyOnceTheClientsHaveExited() async throws {
+        // The client puts the phone in order through the adb server when it is stopped.
+        let tools = try await launchedTools(adb: """
+        echo "$*" >> "$0.log"
+        [ "$1" = devices ] || exit 0
+        echo "* daemon started successfully" >&2
+        printf 'List of devices attached\\nS1 device\\n'
+        """, scrcpy: """
+        [ "$1" = --warm-up ] && exit 0
+        trap '/bin/sleep 0.5; echo "client exited" >> "$ADB.log"; exit 0' TERM
+        while :; do /bin/sleep 0.1; done
+        """)
+        let model = AppModel(tools: tools)
+        await model.refreshDevices()
+        model.toggleMirroring(try #require(model.devices.first))
+        try await Task.sleep(for: .milliseconds(200))
+        await model.quit()
+        // Mirror while quitting starts nothing.
+        model.toggleMirroring(try #require(model.devices.first))
+        #expect(model.sessions.isEmpty)
+        let log = try String(contentsOf: URL(fileURLWithPath: tools.adb.path + ".log"), encoding: .utf8)
+        #expect(log.split(separator: "\n").suffix(2) == ["client exited", "kill-server"])
+    }
+
     @Test func quitWaitsForThePollInFlight() async throws {
         let tools = try await launchedTools(adb: """
         echo "$*" >> "$0.log"

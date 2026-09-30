@@ -3,9 +3,15 @@ import AVFoundation
 
 /// The window showing the device screen. It keeps the video's aspect ratio, follows
 /// rotation, passes the mouse and the keyboard to the device, shares the clipboard with it,
-/// plays its audio, and ends the program when it closes or the device disconnects.
+/// plays its audio, turns the phone's screen off and on, and ends the program when it closes or
+/// the device disconnects.
 final class MirrorWindow {
     private let server: Server
+    /// The phone's log (Server.startLog).
+    private let log: (output: FileHandle, marker: String)
+    private var screen = ScreenPower()
+    /// The deadline a tick is already scheduled for.
+    private var tickAt: Double?
     private let window: NSWindow
     private let layer = AVSampleBufferDisplayLayer()
     private var videoSize: NSSize
@@ -16,8 +22,9 @@ final class MirrorWindow {
     private var clipboard = ClipboardSync()
     private let turnScreenOff: Bool
 
-    init(server: Server, options: Options, videoSize: NSSize) {
+    init(server: Server, log: (output: FileHandle, marker: String), options: Options, videoSize: NSSize) {
         self.server = server
+        self.log = log
         self.videoSize = videoSize
         keyboard = options.keyboard ? HIDKeyboard() : nil
         turnScreenOff = options.turnScreenOff
@@ -36,6 +43,8 @@ final class MirrorWindow {
             defer: false
         )
         window.title = options.windowTitle ?? server.deviceName
+        // Closed, it stays in use until the phone is left safe (end()).
+        window.isReleasedWhenClosed = false
         // No full screen: the green button zooms the window to the largest size the screen
         // allows at the video's aspect ratio, which leaves nothing beside the video.
         window.collectionBehavior = .fullScreenNone
@@ -52,9 +61,11 @@ final class MirrorWindow {
             // Sequence 0 asks for no acknowledgment.
             if let text = clipboard.textToPaste(from: .general) { send(.setClipboard(sequence: 0, paste: true, text: text)) }
         }
+        view.onTurnScreen = { [unowned self] on in updateScreen(on ? .turnOn : .turnOff) }
+        view.canTurnScreen = { [unowned self] on in on ? screen.canTurnOn : screen.canTurnOff }
         let center = NotificationCenter.default
-        center.addObserver(forName: NSWindow.willCloseNotification, object: window, queue: .main) { _ in
-            MainActor.assumeIsolated { quit(0) }
+        center.addObserver(forName: NSWindow.willCloseNotification, object: window, queue: .main) { [self] _ in
+            MainActor.assumeIsolated { end() }
         }
         // Key releases go to another window from now on.
         center.addObserver(forName: NSWindow.didResignKeyNotification, object: window, queue: .main) { [self] _ in
@@ -98,10 +109,35 @@ final class MirrorWindow {
                 DispatchQueue.main.async { self.keyboard?.capsLock = leds & 0x02 != 0 }
             }
         }
-        // Once the video is on its way, as scrcpy does. The server has woken the screen first if
-        // it was off, and turns it back on when it ends.
-        if turnScreenOff {
-            send(.setDisplayPower(on: false))
+        // Once the video is on its way, as scrcpy does, and the phone's log is read.
+        updateScreen(.start(turnScreenOff: turnScreenOff))
+        let (output, marker) = log
+        startReader { [self] in
+            try receivePhoneEvents(output.fileDescriptor, marker: marker) { events in
+                DispatchQueue.main.async { self.updateScreen(.log(events)) }
+            }
+        }
+    }
+
+    /// Hides the window and ends the program once the phone is left safe (ScreenPower).
+    func end() {
+        window.orderOut(nil)
+        updateScreen(.end)
+    }
+
+    /// Passes an input to the screen's state machine and does what it says.
+    private func updateScreen(_ input: ScreenPower.Input) {
+        let now = ProcessInfo.processInfo.systemUptime
+        let action = screen.handle(input, at: now)
+        if let deadline = screen.deadline, deadline != tickAt {
+            tickAt = deadline
+            DispatchQueue.main.asyncAfter(deadline: .now() + max(deadline - now, 0)) { [self] in updateScreen(.tick) }
+        }
+        switch action {
+        case .send(let messages)?: messages.forEach(send)
+        case .quit?: quit(0)
+        case .fail(let message)?: fail(Failure(message))
+        case nil: break
         }
     }
 
@@ -208,17 +244,30 @@ final class MirrorWindow {
     }
 }
 
-/// The window's content: the video, the mouse events on it, and the Edit menu's commands,
-/// which act on the device's clipboard.
-final class InputView: NSView {
+/// The window's content: the video, the mouse events on it, the Edit menu's commands, which act
+/// on the device's clipboard, and the Phone menu's.
+final class InputView: NSView, NSMenuItemValidation {
     var onMouse: (NSEvent) -> Void = { _ in }
     var onCopy: (CopyKey) -> Void = { _ in }
     var onPaste: () -> Void = {}
+    var onTurnScreen: (_ on: Bool) -> Void = { _ in }
+    var canTurnScreen: (_ on: Bool) -> Bool = { _ in false }
 
     override var acceptsFirstResponder: Bool { true }
     @objc func copy(_ sender: Any?) { onCopy(.copy) }
     @objc func cut(_ sender: Any?) { onCopy(.cut) }
     @objc func paste(_ sender: Any?) { onPaste() }
+    @objc func turnScreenOff(_ sender: Any?) { onTurnScreen(false) }
+    @objc func turnScreenOn(_ sender: Any?) { onTurnScreen(true) }
+
+    // The Phone menu waits while the client turns the screen off or on, or repairs it.
+    func validateMenuItem(_ item: NSMenuItem) -> Bool {
+        switch item.action {
+        case #selector(turnScreenOff(_:)): canTurnScreen(false)
+        case #selector(turnScreenOn(_:)): canTurnScreen(true)
+        default: true
+        }
+    }
 
     // The click that brings the window forward reaches the device too, as in scrcpy.
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }

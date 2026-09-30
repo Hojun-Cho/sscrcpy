@@ -151,6 +151,21 @@ let landscape = [
     #expect(try Options(["--serial=abc", "--window-title=a=b"]).windowTitle == "a=b")
 }
 
+@Test func serverParameters() throws {
+    // Options.java's names; a screen off from the start also keeps the phone from sleeping.
+    let all = try Options([
+        "--serial=abc", "--video-bit-rate=8M", "--max-size=1024", "--max-fps=60", "--no-audio",
+        "--stay-awake", "--turn-screen-off", "--show-touches",
+    ])
+    #expect(Server.parameters(all) == [
+        "video_bit_rate=8000000", "audio=false", "max_size=1024", "max_fps=60",
+        "stay_awake=true", "show_touches=true", "keep_active=true",
+    ])
+    #expect(Server.parameters(try Options(["--serial=abc"])) == ["video_bit_rate=8000000"])
+    #expect(Server.parameters(try Options(["--serial=abc", "--turn-screen-off"])) == ["video_bit_rate=8000000", "keep_active=true"])
+    #expect(Server.parameters(try Options(["--serial=abc", "--show-touches"])) == ["video_bit_rate=8000000", "show_touches=true"])
+}
+
 @Test func streamCutInsideAPacketIsADisconnect() throws {
     // A header announcing 100 bytes, then only 3 of them: receiveVideo returns as for any
     // disconnect instead of failing.

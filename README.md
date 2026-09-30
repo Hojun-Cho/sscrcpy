@@ -5,6 +5,7 @@ A macOS menu bar app for mirroring Android phones. It runs [scrcpy](https://gith
 - Pick a USB or Wi-Fi phone from the menu bar and press **Mirror**; **+** pairs Android 11+ phones over Wi-Fi.
 - Settings: resolution, bit rate, frame rate, audio, keep awake, screen off, show touches, always on top, and the physical keyboard (on by default; needed for typing, including Korean).
 - Mouse buttons reach the phone as themselves: right-click is a right-click.
+- The mirror window's Phone menu turns the phone's screen off and on while mirroring.
 - Quitting (at the bottom of Settings) stops the adb server if sscrcpy started it, because macOS ties Local Network access to the app that started the server. If Wi-Fi fails with "No route to host", check that no VPN blocks the local network, then press **Restart adb** under the error.
 
 ## Install

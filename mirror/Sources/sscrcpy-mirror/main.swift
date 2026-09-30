@@ -53,10 +53,10 @@ nonisolated func positive(_ value: String, _ argument: String, suffixes: Bool = 
     return n * multiplier
 }
 
-/// Ends the program, and first its adb processes, which would outlive it: the server's shell
-/// and, while connecting, the adb command running. They are the only processes it starts, two
-/// at most. The sockets close at exit, which ends the server; its cleanup process then restores
-/// the device.
+/// Ends the program, and first its adb processes, which would outlive it: the server's shell,
+/// the log's shell and, while connecting, the adb command running. They are the only processes
+/// it starts, three at most. The sockets close at exit, which ends the server; its cleanup
+/// process then restores the device.
 func quit(_ status: Int32) -> Never {
     var children = [pid_t](repeating: 0, count: 8)
     let count = proc_listchildpids(getpid(), &children, Int32(children.count * MemoryLayout<pid_t>.size))
@@ -78,16 +78,28 @@ guard let adbPath = ProcessInfo.processInfo.environment["ADB"], adbPath.hasPrefi
 }
 let adb = ADB(executable: URL(fileURLWithPath: adbPath), serial: options.serial)
 
+/// Ends the session: at once while connecting, else once the phone is left safe.
+func end() {
+    if let window { window.end() } else { quit(0) }
+}
+
 // The app stops mirroring with SIGTERM. The source watches before the signal is ignored, so
 // that none is lost.
 let terminate = DispatchSource.makeSignalSource(signal: SIGTERM, queue: .main)
-terminate.setEventHandler { quit(0) }
+terminate.setEventHandler { end() }
 terminate.resume()
 signal(SIGTERM, SIG_IGN)
-// Quit, from the menu, the Dock or at logout, ends here too, even while connecting.
-NotificationCenter.default.addObserver(forName: NSApplication.willTerminateNotification, object: nil, queue: .main) { _ in
-    MainActor.assumeIsolated { quit(0) }
+
+/// Quit, from the menu, the Dock or at logout, ends the session as SIGTERM does. AppKit waits
+/// for a reply that never comes: end() exits.
+final class AppDelegate: NSObject, NSApplicationDelegate {
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        end()
+        return .terminateLater
+    }
 }
+let appDelegate = AppDelegate()
+NSApplication.shared.delegate = appDelegate
 
 // The app is in the Dock while it connects, as scrcpy is.
 NSApplication.shared.setActivationPolicy(.regular)
@@ -105,11 +117,15 @@ do {
     editMenu.addItem(withTitle: "Cut", action: #selector(NSText.cut(_:)), keyEquivalent: "x")
     editMenu.addItem(withTitle: "Copy", action: #selector(NSText.copy(_:)), keyEquivalent: "c")
     editMenu.addItem(withTitle: "Paste", action: #selector(NSText.paste(_:)), keyEquivalent: "v")
+    // No key equivalents, and no checkmark: the phone turns its screen off and on by itself too.
+    let phoneMenu = NSMenu(title: "Phone")
+    phoneMenu.addItem(withTitle: "Turn Screen Off", action: #selector(InputView.turnScreenOff(_:)), keyEquivalent: "")
+    phoneMenu.addItem(withTitle: "Turn Screen On", action: #selector(InputView.turnScreenOn(_:)), keyEquivalent: "")
     let windowMenu = NSMenu(title: "Window")
     windowMenu.addItem(withTitle: "Close", action: #selector(NSWindow.performClose(_:)), keyEquivalent: "w")
     windowMenu.addItem(withTitle: "Minimize", action: #selector(NSWindow.performMiniaturize(_:)), keyEquivalent: "m")
     let bar = NSMenu()
-    for menu in [appMenu, editMenu, windowMenu] {
+    for menu in [appMenu, editMenu, phoneMenu, windowMenu] {
         bar.addItem(withTitle: menu.title, action: nil, keyEquivalent: "").submenu = menu
     }
     NSApp.mainMenu = bar
@@ -119,10 +135,12 @@ do {
 var window: MirrorWindow?
 Thread { [adb, options] in
     do {
+        // First, so that the log's marker comes before the server wakes the phone.
+        let log = try Server.startLog(adb)
         let server = try Server.start(adb, options)
         let videoSize = try receiveVideoStart(server.video)
         DispatchQueue.main.async {
-            window = MirrorWindow(server: server, options: options, videoSize: NSSize(width: videoSize.width, height: videoSize.height))
+            window = MirrorWindow(server: server, log: log, options: options, videoSize: NSSize(width: videoSize.width, height: videoSize.height))
             window?.start()
             NSApp.activate()
         }

@@ -3,7 +3,7 @@ import Carbon.HIToolbox
 
 /// A point of the video, in pixels of the video size it was computed for: the server drops
 /// events computed for another size, since the device has rotated in between.
-nonisolated struct Position {
+nonisolated struct Position: Equatable {
     var x: Int32
     var y: Int32
     var width: UInt16
@@ -15,6 +15,11 @@ nonisolated enum MotionAction: UInt8 {
     case down = 0, up = 1, move = 2, hoverMove = 7
 }
 
+/// Android's key event actions (KeyEvent.java).
+nonisolated enum KeyAction: UInt8 {
+    case down = 0, up = 1
+}
+
 /// The key the device presses when asked for its clipboard (control_msg.h). The clipboard
 /// change it makes comes back like any other.
 nonisolated enum CopyKey: UInt8 {
@@ -22,9 +27,20 @@ nonisolated enum CopyKey: UInt8 {
 }
 
 /// The messages this client sends to the server (control_msg.c).
-nonisolated enum ControlMessage {
+nonisolated enum ControlMessage: Equatable {
     /// scrcpy's pointer id for the mouse.
     static let mouse = UInt64.max
+    /// KEYCODE_SLEEP and KEYCODE_WAKEUP (KeyEvent.java). Unlike POWER, which toggles after
+    /// waiting for a second press, each acts at once and only one way: SLEEP on an awake
+    /// phone, WAKEUP on a sleeping one.
+    static let sleepKey: UInt32 = 223, wakeUpKey: UInt32 = 224
+
+    /// A key pressed and released.
+    static func press(_ keycode: UInt32) -> [ControlMessage] {
+        [KeyAction.down, .up].map { .injectKeycode(action: $0, keycode: keycode, repeatCount: 0, metaState: 0) }
+    }
+
+    case injectKeycode(action: KeyAction, keycode: UInt32, repeatCount: UInt32, metaState: UInt32)
 
     case touch(action: MotionAction, pointer: UInt64, position: Position, pressure: Float, actionButton: UInt32, buttons: UInt32)
     case scroll(position: Position, horizontal: Float, vertical: Float, buttons: UInt32)
@@ -50,6 +66,11 @@ nonisolated enum ControlMessage {
             u16(p.height)
         }
         switch self {
+        case let .injectKeycode(action, keycode, repeatCount, metaState):
+            b = [0, action.rawValue]
+            u32(keycode)
+            u32(repeatCount)
+            u32(metaState)
         case let .touch(action, pointer, p, pressure, actionButton, buttons):
             b = [2, action.rawValue]
             u64(pointer)

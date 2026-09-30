@@ -62,9 +62,15 @@ import Testing
     @Test func normalEndsHaveNoMessage() {
         #expect(exit(0).message == nil)
         #expect(exit(15, signal: true, stopped: true).message == nil)
-        #expect(exit(1, "ERROR: whatever", stopped: true).message == nil)
+        #expect(exit(0, stopped: true).message == nil)
         // A disconnect shows in the device list; a message would outlive the reconnect.
         #expect(exit(2, "WARN: Device disconnected").message == nil)
+    }
+
+    @Test func failureWhileStoppingIsShown() {
+        // The client could not leave the phone in order.
+        #expect(exit(1, "ERROR: the phone did not go to sleep within 15 seconds", stopped: true).message
+            == "the phone did not go to sleep within 15 seconds")
     }
 
     @Test func firstErrorLineIsShown() {

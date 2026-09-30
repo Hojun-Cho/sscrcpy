@@ -26,8 +26,9 @@ nonisolated struct MirrorExit: Sendable {
 
     /// Text to show next to the device, or nil when mirroring ended normally.
     var message: String? {
-        // Status 2 means the device disconnected; the device list already shows that.
-        if stopRequested || (!killedBySignal && (status == 0 || status == 2)) { return nil }
+        // Status 2 means the device disconnected; the device list already shows that. A client
+        // stopped by the app can still fail: it puts the phone in order before it exits.
+        if killedBySignal ? stopRequested : (status == 0 || status == 2) { return nil }
         let lines = output.split(whereSeparator: \.isNewline).map { $0.trimmingCharacters(in: .whitespaces) }
         // "ERROR:" can follow "[server] " (the device side).
         for line in lines {
@@ -86,7 +87,8 @@ final class MirrorSession {
         }
     }
 
-    /// Asks the client to quit (SIGTERM), which closes its window and cleans up on the device.
+    /// Asks the client to quit (SIGTERM): it closes its window and exits once the phone is in
+    /// order, a few seconds later if it had turned the phone's screen off.
     func stop() {
         stopRequested = true
         process.terminate()

@@ -78,20 +78,12 @@ nonisolated struct Server {
             }
         }
 
-        var arguments = [
-            "-s", adb.serial, "shell", "CLASSPATH=\(devicePath)", "app_process", "/",
-            "com.genymobile.scrcpy.Server", version, "scid=\(scid)", "log_level=info",
-            "video_bit_rate=\(options.videoBitRate)",
-        ]
-        if !options.audio { arguments.append("audio=false") }
-        if options.maxSize > 0 { arguments.append("max_size=\(options.maxSize)") }
-        if options.maxFps > 0 { arguments.append("max_fps=\(options.maxFps)") }
-        // The server changes these settings, and its cleanup process restores them when it ends.
-        if options.stayAwake { arguments.append("stay_awake=true") }
-        if options.showTouches { arguments.append("show_touches=true") }
         let process = Process()
         process.executableURL = adb.executable
-        process.arguments = arguments
+        process.arguments = [
+            "-s", adb.serial, "shell", "CLASSPATH=\(devicePath)", "app_process", "/",
+            "com.genymobile.scrcpy.Server", version, "scid=\(scid)", "log_level=info",
+        ] + parameters(options)
         process.standardInput = FileHandle.nullDevice
         try process.run()
 
@@ -117,6 +109,46 @@ nonisolated struct Server {
             control: control,
             deviceName: String(decoding: name.prefix { $0 != 0 }, as: UTF8.self)
         )
+    }
+
+    /// The server's parameters for the options (Options.java).
+    static func parameters(_ options: Options) -> [String] {
+        var parameters = ["video_bit_rate=\(options.videoBitRate)"]
+        if !options.audio { parameters.append("audio=false") }
+        if options.maxSize > 0 { parameters.append("max_size=\(options.maxSize)") }
+        if options.maxFps > 0 { parameters.append("max_fps=\(options.maxFps)") }
+        // The server changes these settings, and its cleanup process restores them when it ends.
+        if options.stayAwake { parameters.append("stay_awake=true") }
+        if options.showTouches { parameters.append("show_touches=true") }
+        // A phone whose screen is off from the start must not fall asleep by itself: a sleep
+        // with the panel off makes ScreenPower light and repair it, and a locked phone's lock
+        // screen sleeps it 5 s after the server wakes it. keep_active reports user activity every
+        // 4 s for the whole session.
+        if options.turnScreenOff { parameters.append("keep_active=true") }
+        return parameters
+    }
+
+    /// Starts reading the phone's log for ScreenPower: Android's sleeps and wakes (AOSP event
+    /// log tags) and the server's display-power lines, in the order the phone logged them. The
+    /// shell logs `marker` before logcat starts, and logcat begins at the second before it, so
+    /// the marker comes and every line logged after it follows, however late logcat attaches.
+    /// The shell runs until the program quits; adb's own errors go to standard error.
+    static func startLog(_ adb: ADB) throws -> (output: FileHandle, marker: String) {
+        let marker = String(format: "%08x", UInt32.random(in: 0 ... .max))
+        let process = Process()
+        process.executableURL = adb.executable
+        // -T with a fraction is a time, not a count of lines. exec: adbd hangs up the shell's
+        // process when adb goes away, and that must be logcat itself.
+        process.arguments = [
+            "-s", adb.serial, "shell",
+            "t=$(date +%s); log -t sscrcpy \(marker); exec logcat -v tag -b main -b events -T $t.0"
+                + " sscrcpy:I scrcpy:I power_sleep_requested:I power_screen_state:I screen_toggled:I '*:S'",
+        ]
+        process.standardInput = FileHandle.nullDevice
+        let pipe = Pipe()
+        process.standardOutput = pipe
+        try process.run()
+        return (pipe.fileHandleForReading, marker)
     }
 }
 
