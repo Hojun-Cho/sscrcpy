@@ -6,8 +6,10 @@ let package = Package(
     name: "sscrcpy-mirror",
     platforms: [.macOS(.v14)],
     targets: [
+        .target(name: "AudioRing"),
         .executableTarget(
             name: "sscrcpy-mirror",
+            dependencies: ["AudioRing"],
             swiftSettings: [.defaultIsolation(MainActor.self)]
         ),
         .testTarget(

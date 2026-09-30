@@ -6,6 +6,7 @@ nonisolated struct Options {
     var videoBitRate = 8_000_000
     var maxSize = 0
     var maxFps = 0
+    var audio = true
     /// Keys reach the device through a UHID keyboard; without it they are ignored.
     var keyboard = false
 
@@ -22,6 +23,7 @@ nonisolated struct Options {
             case "--max-fps": maxFps = try positive(value, argument)
             // Every mouse button reaches the device as itself: the only binding there is.
             case "--mouse-bind" where value == "++++:++++": break
+            case "--no-audio" where parts.count == 1: audio = false
             case "--keyboard" where value == "uhid": keyboard = true
             default: throw Failure("unknown option: \(argument)")
             }

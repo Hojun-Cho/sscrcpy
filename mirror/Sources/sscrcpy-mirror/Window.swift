@@ -3,7 +3,8 @@ import AVFoundation
 
 /// The window showing the device screen. It keeps the video's aspect ratio, follows
 /// rotation, passes the mouse and the keyboard to the device, shares the clipboard with it,
-/// and ends the program when it closes, the app quits or the device disconnects.
+/// plays its audio, and ends the program when it closes, the app quits or the device
+/// disconnects.
 final class MirrorWindow {
     private let server: Server
     private let window: NSWindow
@@ -69,7 +70,7 @@ final class MirrorWindow {
         }
     }
 
-    /// Shows the window and the video and starts passing input.
+    /// Shows the window and the video, plays the audio and starts passing input.
     func start() {
         window.makeKeyAndOrderFront(nil)
         if keyboard != nil {
@@ -93,6 +94,9 @@ final class MirrorWindow {
             try receiveVideo(video, to: renderer) { width, height in
                 DispatchQueue.main.async { self.resize(to: NSSize(width: width, height: height)) }
             }
+        }
+        if let audio = server.audio {
+            startReader { try receiveAudio(audio, play: startOutput) }
         }
         let control = server.control
         startReader { [self] in

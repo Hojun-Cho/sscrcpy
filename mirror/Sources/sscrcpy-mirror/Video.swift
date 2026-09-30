@@ -1,13 +1,13 @@
 import AVFoundation
 
-/// The 12-byte header before each packet of the video stream.
+/// The 12-byte header before each packet of the video and audio streams.
 nonisolated enum Header: Equatable {
-    /// A capture session starts (at first, then on each rotation), at this video size.
+    /// A video capture session starts (at first, then on each rotation), at this video size.
     /// No payload follows.
     case session(width: Int, height: Int)
-    /// `size` bytes of H.264 Annex B data follow: the codec configuration (SPS and PPS)
-    /// or a frame.
-    case media(size: Int, config: Bool, keyFrame: Bool)
+    /// `size` bytes follow: the codec configuration (for H.264, SPS and PPS) or a frame or
+    /// audio packet, which starts at `pts` microseconds.
+    case media(size: Int, config: Bool, keyFrame: Bool, pts: Int64)
 
     init(_ b: [UInt8]) {
         func u32(_ i: Int) -> Int {
@@ -16,9 +16,10 @@ nonisolated enum Header: Equatable {
         if b[0] & 0x80 != 0 {
             self = .session(width: u32(4), height: u32(8))
         } else {
-            // The high bits of the 64-bit PTS carry the flags; the PTS itself is unused
-            // because every frame is shown as soon as it is decoded.
-            self = .media(size: u32(8), config: b[0] & 0x40 != 0, keyFrame: b[0] & 0x20 != 0)
+            // The high bits of the 64-bit PTS carry the flags. Video ignores the PTS: every
+            // frame is shown as soon as it is decoded.
+            let pts = Int64(u32(0) & 0x1fff_ffff) << 32 | Int64(u32(4))
+            self = .media(size: u32(8), config: b[0] & 0x40 != 0, keyFrame: b[0] & 0x20 != 0, pts: pts)
         }
     }
 }
@@ -57,7 +58,7 @@ nonisolated func receiveVideo(
         switch Header(header) {
         case let .session(width, height):
             session = (width, height)
-        case let .media(size, config, keyFrame):
+        case let .media(size, config, keyFrame, _):
             guard size > 0 else { throw Failure("empty video packet") }
             if packet.count < size { packet = [UInt8](repeating: 0, count: size) }
             // The server never cuts a packet short: the device disconnected, as between packets.

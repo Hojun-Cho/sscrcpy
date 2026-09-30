@@ -10,12 +10,12 @@ import Testing
 
 @Test func mediaHeaders() {
     let config: [UInt8] = [0x40, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 31]
-    #expect(Header(config) == .media(size: 31, config: true, keyFrame: false))
-    // PTS bits must not leak into the flags.
+    #expect(Header(config) == .media(size: 31, config: true, keyFrame: false, pts: 0))
+    // PTS bits must not leak into the flags, nor flags into the PTS.
     let keyFrame: [UInt8] = [0x20, 0x1F, 0xFF, 0, 0, 0x12, 0x34, 0x56, 0, 1, 0, 0]
-    #expect(Header(keyFrame) == .media(size: 65536, config: false, keyFrame: true))
+    #expect(Header(keyFrame) == .media(size: 65536, config: false, keyFrame: true, pts: 0x1FFF_0000_1234_56))
     let frame: [UInt8] = [0x1F, 0xFF, 0, 0, 0, 0, 0, 0, 0, 0, 0x10, 0]
-    #expect(Header(frame) == .media(size: 4096, config: false, keyFrame: false))
+    #expect(Header(frame) == .media(size: 4096, config: false, keyFrame: false, pts: 0x1FFF_0000_0000_0000))
 }
 
 @Test func nalUnitsWithMixedStartCodes() {

@@ -1,6 +1,7 @@
 BUILD   := build
 BIN     := $(BUILD)/sscrcpy-mirror
 SOURCES := $(wildcard Sources/sscrcpy-mirror/*.swift)
+RING    := Sources/AudioRing
 
 # The client speaks exactly this server's protocol (scrcpy 4.1), so the file is pinned by
 # its checksum.
@@ -20,9 +21,13 @@ TESTING_PLUGINS := $(shell dirname $$(xcrun --find swift))/../lib/swift/host/plu
 
 all: $(BIN) $(BUILD)/scrcpy-server
 
-$(BIN): $(SOURCES)
+$(BIN): $(SOURCES) $(BUILD)/AudioRing.o
+	swiftc $(SWIFTFLAGS) -target $(TARGET) -I $(RING)/include $(SOURCES) $(BUILD)/AudioRing.o -o $@
+
+# A call in the render callback that may block (CA_REALTIME_API) is an error.
+$(BUILD)/AudioRing.o: $(RING)/AudioRing.c $(RING)/include/AudioRing.h
 	mkdir -p $(BUILD)
-	swiftc $(SWIFTFLAGS) -target $(TARGET) $(SOURCES) -o $@
+	clang -O2 -Wall -Werror=function-effects -target $(TARGET) -I $(RING)/include -c $< -o $@
 
 $(BUILD)/scrcpy-server: $(SERVER)
 	mkdir -p $(BUILD)

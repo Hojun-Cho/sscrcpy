@@ -52,6 +52,8 @@ nonisolated struct Server {
     /// `adb shell` running the server.
     var process: Process
     var video: Int32
+    /// Nil with --no-audio.
+    var audio: Int32?
     /// Input to the device, and the device's messages back.
     var control: Int32
     var deviceName: String
@@ -78,8 +80,9 @@ nonisolated struct Server {
         var arguments = [
             "-s", adb.serial, "shell", "CLASSPATH=\(devicePath)", "app_process", "/",
             "com.genymobile.scrcpy.Server", version, "scid=\(scid)", "log_level=info",
-            "video_bit_rate=\(options.videoBitRate)", "audio=false",
+            "video_bit_rate=\(options.videoBitRate)",
         ]
+        if !options.audio { arguments.append("audio=false") }
         if options.maxSize > 0 { arguments.append("max_size=\(options.maxSize)") }
         if options.maxFps > 0 { arguments.append("max_fps=\(options.maxFps)") }
         let process = Process()
@@ -91,6 +94,7 @@ nonisolated struct Server {
         do {
             // The server connects its sockets in this order, then names the device on the first.
             let video = try accept(listener, from: process)
+            let audio = options.audio ? try accept(listener, from: process) : nil
             let control = try accept(listener, from: process)
             var on: Int32 = 1
             let size = socklen_t(MemoryLayout<Int32>.size)
@@ -107,6 +111,7 @@ nonisolated struct Server {
             return Server(
                 process: process,
                 video: video,
+                audio: audio,
                 control: control,
                 deviceName: String(decoding: name.prefix { $0 != 0 }, as: UTF8.self)
             )
@@ -121,6 +126,7 @@ nonisolated struct Server {
     /// separate cleanup process restores the device settings.
     func stop() {
         shutdown(video, SHUT_RDWR)
+        if let audio { shutdown(audio, SHUT_RDWR) }
         shutdown(control, SHUT_RDWR)
         if process.isRunning { process.terminate() }
     }
