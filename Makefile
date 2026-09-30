@@ -34,13 +34,13 @@ app: $(APP)
 # An ad-hoc signature's default requirement is the build's hash; naming the bundle ID
 # instead keeps the app's identity across upgrades (Homebrew's signer check, macOS
 # privacy permissions such as Local Network).
-$(APP): $(SOURCES) Resources/Info.plist $(BUILD)/AppIcon.icns $(MIRROR_OUT) $(MIRROR)/scrcpy-server.LICENSE
+$(APP): $(SOURCES) Resources/Info.plist Resources/AppIcon.icns $(MIRROR_OUT) $(MIRROR)/scrcpy-server.LICENSE
 	rm -rf $(STAGE)
 	mkdir -p $(STAGE)/Contents/MacOS $(STAGE)/Contents/Resources
 	swiftc $(SWIFTFLAGS) -target $(TARGET) $(SOURCES) -o $(STAGE)/Contents/MacOS/$(APP_NAME)
 	cp $(MIRROR)/build/sscrcpy-mirror $(STAGE)/Contents/MacOS/sscrcpy-mirror
 	cp Resources/Info.plist $(STAGE)/Contents/Info.plist
-	cp $(BUILD)/AppIcon.icns $(STAGE)/Contents/Resources/AppIcon.icns
+	cp Resources/AppIcon.icns $(STAGE)/Contents/Resources/AppIcon.icns
 	# scrcpy-server is Apache 2.0, which requires its license alongside.
 	cp $(MIRROR)/build/scrcpy-server $(MIRROR)/scrcpy-server.LICENSE $(STAGE)/Contents/Resources/
 	codesign --force --sign - -r='designated => identifier "$(BUNDLE_ID)"' $(STAGE)
@@ -50,20 +50,6 @@ $(APP): $(SOURCES) Resources/Info.plist $(BUILD)/AppIcon.icns $(MIRROR_OUT) $(MI
 # The client's own make runs every time; the app is rebuilt only when that changes its output.
 $(MIRROR_OUT): FORCE
 	$(MAKE) -C $(MIRROR)
-
-$(BUILD)/AppIcon.icns: scripts/make-icon.swift
-	rm -rf $(BUILD)/AppIcon.iconset
-	mkdir -p $(BUILD)/AppIcon.iconset
-	swiftc -O scripts/make-icon.swift -o $(BUILD)/make-icon
-	$(BUILD)/make-icon $(BUILD)/icon-1024.png
-	for s in 16 32 128 256 512; do \
-		sips -z $$s $$s $(BUILD)/icon-1024.png --out $(BUILD)/AppIcon.iconset/icon_$${s}x$${s}.png >/dev/null || exit 1; \
-	done
-	# 128@2x and 256@2x would repeat the 256 and 512 px images.
-	for s in 16 32 512; do \
-		sips -z $$((s * 2)) $$((s * 2)) $(BUILD)/icon-1024.png --out $(BUILD)/AppIcon.iconset/icon_$${s}x$${s}@2x.png >/dev/null || exit 1; \
-	done
-	iconutil -c icns $(BUILD)/AppIcon.iconset -o $@
 
 run: app
 	open $(APP)

@@ -4,7 +4,7 @@ cask "sscrcpy" do
 
   url "https://github.com/OWNER/sscrcpy/releases/download/v#{version}/sscrcpy-#{version}.zip"
   name "sscrcpy"
-  desc "Menu bar frontend for scrcpy"
+  desc "Menu bar app for mirroring Android phones"
   homepage "https://github.com/OWNER/sscrcpy"
 
   depends_on arch: :arm64
