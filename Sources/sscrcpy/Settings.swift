@@ -50,9 +50,7 @@ import Observation
 
     /// scrcpy flags for the current settings, without the device selection.
     func scrcpyArguments() -> [String] {
-        // Every mouse button reaches the phone as itself; scrcpy's default turns right-click
-        // into BACK and middle-click into HOME.
-        var args = ["--video-bit-rate=\(videoBitRateMbps)M", "--mouse-bind=++++:++++"]
+        var args = ["--video-bit-rate=\(videoBitRateMbps)M"]
         if maxSize > 0 { args.append("--max-size=\(maxSize)") }
         if maxFps > 0 { args.append("--max-fps=\(maxFps)") }
         if !audio { args.append("--no-audio") }

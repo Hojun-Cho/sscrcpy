@@ -300,9 +300,8 @@ private func mirror(scrcpy: String, stopAfter: Duration? = nil) async throws -> 
         UserDefaults(suiteName: fixtures.appendingPathComponent("defaults-\(UUID().uuidString)").path)!
     }
 
-    @Test func untouchedSettingsPinTheBitRateAndForwardMouseAndKeyboard() {
-        #expect(Settings(defaults: makeDefaults()).scrcpyArguments()
-            == ["--video-bit-rate=8M", "--mouse-bind=++++:++++", "--keyboard=uhid"])
+    @Test func untouchedSettingsPinTheBitRateAndTurnOnTheKeyboard() {
+        #expect(Settings(defaults: makeDefaults()).scrcpyArguments() == ["--video-bit-rate=8M", "--keyboard=uhid"])
     }
 
     @Test func changesBecomeFlagsAndPersist() {
@@ -318,7 +317,7 @@ private func mirror(scrcpy: String, stopAfter: Duration? = nil) async throws -> 
         settings.alwaysOnTop = true
         settings.physicalKeyboard = false
         let expected = [
-            "--video-bit-rate=16M", "--mouse-bind=++++:++++", "--max-size=1920", "--max-fps=60", "--no-audio", "--stay-awake",
+            "--video-bit-rate=16M", "--max-size=1920", "--max-fps=60", "--no-audio", "--stay-awake",
             "--turn-screen-off", "--show-touches", "--always-on-top",
         ]
         #expect(settings.scrcpyArguments() == expected)

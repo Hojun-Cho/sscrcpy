@@ -129,7 +129,7 @@ let landscape = [
 @Test func appFlags() throws {
     // Every flag the app passes (AppModel.swift, Settings.swift).
     let all = try Options([
-        "--serial=abc", "--window-title=Phone", "--video-bit-rate=8M", "--mouse-bind=++++:++++", "--max-size=1024",
+        "--serial=abc", "--window-title=Phone", "--video-bit-rate=8M", "--max-size=1024",
         "--max-fps=60", "--no-audio", "--stay-awake", "--turn-screen-off", "--show-touches", "--always-on-top", "--keyboard=uhid",
     ])
     #expect(all.stayAwake && all.turnScreenOff && all.showTouches && all.alwaysOnTop)

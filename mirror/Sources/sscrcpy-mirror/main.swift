@@ -26,8 +26,6 @@ nonisolated struct Options {
             case ("--video-bit-rate", let value?): videoBitRate = try positive(value, argument, suffixes: true)
             case ("--max-size", let value?): maxSize = try positive(value, argument)
             case ("--max-fps", let value?): maxFps = try positive(value, argument)
-            // Every mouse button reaches the device as itself: the only binding there is.
-            case ("--mouse-bind", "++++:++++"): break
             case ("--keyboard", "uhid"): keyboard = true
             case ("--no-audio", nil): audio = false
             case ("--stay-awake", nil): stayAwake = true

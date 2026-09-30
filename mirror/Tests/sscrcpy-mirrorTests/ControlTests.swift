@@ -351,10 +351,11 @@ import Testing
 }
 
 @Test func inputOptions() throws {
-    let o = try Options(["--serial=abc", "--mouse-bind=++++:++++", "--keyboard=uhid"])
+    let o = try Options(["--serial=abc", "--keyboard=uhid"])
     #expect(o.keyboard)
     #expect(try !Options(["--serial=abc"]).keyboard)
-    #expect(throws: Failure.self) { try Options(["--serial=abc", "--mouse-bind=+bhs:++++"]) }
+    // Every mouse button always reaches the device as itself: there are no bindings to pick.
+    #expect(throws: Failure.self) { try Options(["--serial=abc", "--mouse-bind=++++:++++"]) }
     #expect(throws: Failure.self) { try Options(["--serial=abc", "--keyboard=sdk"]) }
     #expect(throws: Failure.self) { try Options(["--serial=abc", "--keyboard"]) }
 }
