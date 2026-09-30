@@ -49,8 +49,6 @@ nonisolated struct Server {
     static let version = "4.1"
     static let devicePath = "/data/local/tmp/scrcpy-server.jar"
 
-    /// `adb shell` running the server.
-    var process: Process
     var video: Int32
     /// Nil with --no-audio.
     var audio: Int32?
@@ -58,10 +56,13 @@ nonisolated struct Server {
     var control: Int32
     var deviceName: String
 
-    /// Pushes and starts the server, then waits for it to connect through `adb reverse`.
+    /// Pushes and starts the server, then waits for it to connect through `adb reverse`. The
+    /// server's `adb shell` runs until the program quits.
     static func start(_ adb: ADB, _ options: Options) throws -> Server {
-        let jar = Bundle.main.executableURL!.resolvingSymlinksInPath()
-            .deletingLastPathComponent().appendingPathComponent("scrcpy-server")
+        // In the app, sscrcpy.app/Contents/Resources; in a build, next to the executable.
+        guard let jar = Bundle.main.url(forResource: "scrcpy-server", withExtension: nil) else {
+            throw Failure("scrcpy-server not found in \(Bundle.main.bundlePath)")
+        }
         try adb.run(["push", jar.path, devicePath], timeout: 30)
 
         // A random id keeps concurrent sessions on one device apart, as in scrcpy.
@@ -85,50 +86,37 @@ nonisolated struct Server {
         if !options.audio { arguments.append("audio=false") }
         if options.maxSize > 0 { arguments.append("max_size=\(options.maxSize)") }
         if options.maxFps > 0 { arguments.append("max_fps=\(options.maxFps)") }
+        // The server changes these settings, and its cleanup process restores them when it ends.
+        if options.stayAwake { arguments.append("stay_awake=true") }
+        if options.showTouches { arguments.append("show_touches=true") }
         let process = Process()
         process.executableURL = adb.executable
         process.arguments = arguments
         process.standardInput = FileHandle.nullDevice
         try process.run()
 
-        do {
-            // The server connects its sockets in this order, then names the device on the first.
-            let video = try accept(listener, from: process)
-            let audio = options.audio ? try accept(listener, from: process) : nil
-            let control = try accept(listener, from: process)
-            var on: Int32 = 1
-            let size = socklen_t(MemoryLayout<Int32>.size)
-            // Input goes out in small writes that must not wait for more (Nagle), and a write
-            // after the device is gone must fail instead of raising SIGPIPE.
-            guard setsockopt(control, IPPROTO_TCP, TCP_NODELAY, &on, size) == 0,
-                  setsockopt(control, SOL_SOCKET, SO_NOSIGPIPE, &on, size) == 0 else {
-                throw Failure.system("setsockopt")
-            }
-            var name = [UInt8](repeating: 0, count: 64)
-            guard name.withUnsafeMutableBytes({ receive(video, $0) }) else {
-                throw Failure("could not read the device name")
-            }
-            return Server(
-                process: process,
-                video: video,
-                audio: audio,
-                control: control,
-                deviceName: String(decoding: name.prefix { $0 != 0 }, as: UTF8.self)
-            )
-        } catch {
-            process.terminate()
-            throw error
+        // The server connects its sockets in this order, then names the device on the first.
+        let video = try accept(listener, from: process)
+        let audio = options.audio ? try accept(listener, from: process) : nil
+        let control = try accept(listener, from: process)
+        var on: Int32 = 1
+        let size = socklen_t(MemoryLayout<Int32>.size)
+        // Input goes out in small writes that must not wait for more (Nagle), and a write
+        // after the device is gone must fail instead of raising SIGPIPE.
+        guard setsockopt(control, IPPROTO_TCP, TCP_NODELAY, &on, size) == 0,
+              setsockopt(control, SOL_SOCKET, SO_NOSIGPIPE, &on, size) == 0 else {
+            throw Failure.system("setsockopt")
         }
-    }
-
-    /// Disconnects, which ends the server once the closed control socket reaches it, and ends
-    /// adb at once instead of leaving it running until then. However the server ends, its
-    /// separate cleanup process restores the device settings.
-    func stop() {
-        shutdown(video, SHUT_RDWR)
-        if let audio { shutdown(audio, SHUT_RDWR) }
-        shutdown(control, SHUT_RDWR)
-        if process.isRunning { process.terminate() }
+        var name = [UInt8](repeating: 0, count: 64)
+        guard name.withUnsafeMutableBytes({ receive(video, $0) }) else {
+            throw Failure("could not read the device name")
+        }
+        return Server(
+            video: video,
+            audio: audio,
+            control: control,
+            deviceName: String(decoding: name.prefix { $0 != 0 }, as: UTF8.self)
+        )
     }
 }
 

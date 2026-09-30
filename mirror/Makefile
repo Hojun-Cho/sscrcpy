@@ -3,9 +3,9 @@ BIN     := $(BUILD)/sscrcpy-mirror
 SOURCES := $(wildcard Sources/sscrcpy-mirror/*.swift)
 RING    := Sources/AudioRing
 
-# The client speaks exactly this server's protocol (scrcpy 4.1), so the file is pinned by
-# its checksum.
-SERVER        := /opt/homebrew/Cellar/scrcpy/4.1_1/share/scrcpy/scrcpy-server
+# The client speaks exactly this server's protocol (scrcpy 4.1), so the file is kept here,
+# as released (see scrcpy-server.LICENSE), and pinned by its checksum.
+SERVER        := scrcpy-server
 SERVER_SHA256 := deacb991ed2509715160ffdc7907e47b4160eb30d1566217e9047fd5b8850cae
 
 # swiftc instead of `swift build`: under Command Line Tools, SwiftPM stamps binaries with

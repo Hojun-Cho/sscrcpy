@@ -3,26 +3,24 @@ import AVFoundation
 
 /// The window showing the device screen. It keeps the video's aspect ratio, follows
 /// rotation, passes the mouse and the keyboard to the device, shares the clipboard with it,
-/// plays its audio, and ends the program when it closes, the app quits or the device
-/// disconnects.
+/// plays its audio, and ends the program when it closes or the device disconnects.
 final class MirrorWindow {
     private let server: Server
     private let window: NSWindow
     private let layer = AVSampleBufferDisplayLayer()
     private var videoSize: NSSize
-    /// The video size before a rotation in full screen: the window follows once it leaves
-    /// full screen, as in scrcpy.
-    private var fullScreenVideoSize: NSSize?
     /// Mouse buttons held, as Android's button bits.
     private var buttons: UInt32 = 0
     /// The device's keyboard, or nil when keys are ignored.
     private var keyboard: HIDKeyboard?
     private var clipboard = ClipboardSync()
+    private let turnScreenOff: Bool
 
-    init(server: Server, title: String, videoSize: NSSize, keyboard: Bool) {
+    init(server: Server, options: Options, videoSize: NSSize) {
         self.server = server
         self.videoSize = videoSize
-        self.keyboard = keyboard ? HIDKeyboard() : nil
+        keyboard = options.keyboard ? HIDKeyboard() : nil
+        turnScreenOff = options.turnScreenOff
         layer.backgroundColor = .black
         let view = InputView()
         view.layer = layer
@@ -37,7 +35,12 @@ final class MirrorWindow {
             backing: .buffered,
             defer: false
         )
-        window.title = title
+        window.title = options.windowTitle ?? server.deviceName
+        // No full screen: the green button zooms the window to the largest size the screen
+        // allows at the video's aspect ratio, which leaves nothing beside the video.
+        window.collectionBehavior = .fullScreenNone
+        // The level SDL gives scrcpy's window on top.
+        if options.alwaysOnTop { window.level = .floating }
         window.contentAspectRatio = videoSize
         window.contentView = view
         // The Edit menu's commands go to the first responder.
@@ -50,19 +53,8 @@ final class MirrorWindow {
             if let text = clipboard.textToPaste(from: .general) { send(.setClipboard(sequence: 0, paste: true, text: text)) }
         }
         let center = NotificationCenter.default
-        center.addObserver(forName: NSWindow.willCloseNotification, object: window, queue: .main) { [self] _ in
+        center.addObserver(forName: NSWindow.willCloseNotification, object: window, queue: .main) { _ in
             MainActor.assumeIsolated { quit(0) }
-        }
-        // Quit, from the menu, the Dock or at logout, ends here too.
-        center.addObserver(forName: NSApplication.willTerminateNotification, object: nil, queue: .main) { [self] _ in
-            MainActor.assumeIsolated { quit(0) }
-        }
-        center.addObserver(forName: NSWindow.didExitFullScreenNotification, object: window, queue: .main) { [self] _ in
-            MainActor.assumeIsolated {
-                guard let old = fullScreenVideoSize else { return }
-                fullScreenVideoSize = nil
-                fit(from: old)
-            }
         }
         // Key releases go to another window from now on.
         center.addObserver(forName: NSWindow.didResignKeyNotification, object: window, queue: .main) { [self] _ in
@@ -106,25 +98,22 @@ final class MirrorWindow {
                 DispatchQueue.main.async { self.keyboard?.capsLock = leds & 0x02 != 0 }
             }
         }
-    }
-
-    func quit(_ status: Int32) -> Never {
-        server.stop()
-        exit(status)
+        // Once the video is on its way, as scrcpy does. The server has woken the screen first if
+        // it was off, and turns it back on when it ends.
+        if turnScreenOff {
+            send(.setDisplayPower(on: false))
+        }
     }
 
     /// Runs `receive` on its own thread. The program exits with status 2 when it returns (the
     /// device disconnected), 1 when it fails.
     private func startReader(_ receive: @escaping @Sendable () throws -> Void) {
-        let reader = Thread { [self] in
+        let reader = Thread {
             do {
                 try receive()
-                DispatchQueue.main.async { self.quit(2) }
+                DispatchQueue.main.async { quit(2) }
             } catch {
-                DispatchQueue.main.async {
-                    FileHandle.standardError.write(Data("ERROR: \(error.localizedDescription)\n".utf8))
-                    self.quit(1)
-                }
+                DispatchQueue.main.async { fail(error) }
             }
         }
         reader.qualityOfService = .userInteractive
@@ -195,11 +184,7 @@ final class MirrorWindow {
         guard new != videoSize else { return }
         let old = videoSize
         videoSize = new
-        if window.styleMask.contains(.fullScreen) {
-            fullScreenVideoSize = fullScreenVideoSize ?? old
-        } else {
-            fit(from: old)
-        }
+        fit(from: old)
     }
 
     /// Follows rotation as scrcpy does: scales the window by the change of the video size,

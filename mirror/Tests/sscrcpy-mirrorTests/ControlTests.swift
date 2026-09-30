@@ -99,6 +99,12 @@ import Testing
     }
 }
 
+@Test func displayPowerMessage() {
+    // test_serialize_set_display_power, and off.
+    #expect(ControlMessage.setDisplayPower(on: true).bytes == [10, 1])
+    #expect(ControlMessage.setDisplayPower(on: false).bytes == [10, 0])
+}
+
 @Test func deviceMessages() throws {
     // scrcpy's app/tests/test_device_msg_deserialize.c messages, the server's
     // DeviceMessageWriterTest clipboard, an empty clipboard, then two keyboard LED reports:

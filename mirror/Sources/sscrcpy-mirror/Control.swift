@@ -32,6 +32,8 @@ nonisolated enum ControlMessage {
     /// With `paste`, the device presses Paste once its clipboard has the text. A `sequence`
     /// other than 0 asks for an acknowledgment.
     case setClipboard(sequence: UInt64, paste: Bool, text: String)
+    /// Turns the device's screen off or on; mirroring goes on.
+    case setDisplayPower(on: Bool)
     case uhidCreate(id: UInt16, vendor: UInt16, product: UInt16, name: String, descriptor: [UInt8])
     case uhidInput(id: UInt16, report: [UInt8])
 
@@ -74,6 +76,8 @@ nonisolated enum ControlMessage {
             let utf8 = Self.clipboardBytes(text)
             u32(UInt32(utf8.count))
             b += utf8
+        case let .setDisplayPower(on):
+            b = [10, on ? 1 : 0]
         case let .uhidCreate(id, vendor, product, name, descriptor):
             b = [12]
             u16(id)

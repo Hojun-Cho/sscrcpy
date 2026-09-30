@@ -126,6 +126,31 @@ let landscape = [
     #expect(try Options(["--serial=abc", "--window-title=\u{301}x"]).windowTitle == "\u{301}x")
 }
 
+@Test func appFlags() throws {
+    // Every flag the app passes (AppModel.swift, Settings.swift).
+    let all = try Options([
+        "--serial=abc", "--window-title=Phone", "--video-bit-rate=8M", "--mouse-bind=++++:++++", "--max-size=1024",
+        "--max-fps=60", "--no-audio", "--stay-awake", "--turn-screen-off", "--show-touches", "--always-on-top", "--keyboard=uhid",
+    ])
+    #expect(all.stayAwake && all.turnScreenOff && all.showTouches && all.alwaysOnTop)
+    let none = try Options(["--serial=abc"])
+    #expect(!none.stayAwake && !none.turnScreenOff && !none.showTouches && !none.alwaysOnTop)
+    let some = try Options(["--serial=abc", "--stay-awake", "--always-on-top"])
+    #expect(some.stayAwake && !some.turnScreenOff && !some.showTouches && some.alwaysOnTop)
+    let others = try Options(["--serial=abc", "--turn-screen-off", "--show-touches"])
+    #expect(!others.stayAwake && others.turnScreenOff && others.showTouches && !others.alwaysOnTop)
+    // A value follows "=" or the flag is invalid, even with the value as the next argument; a
+    // switch takes no value.
+    let invalid = [["--window-title"], ["--serial", "abc"], ["--max-size"], ["--stay-awake=1"], ["--always-on-top="],
+                   ["--turn-screen-off=1"], ["--show-touches=1"]]
+    for flags in invalid {
+        #expect(throws: Failure.self) { try Options(["--serial=abc"] + flags) }
+    }
+    // The app's titles are the phone's device name, which the user sets.
+    #expect(try Options(["--serial=abc", "--window-title="]).windowTitle == "")
+    #expect(try Options(["--serial=abc", "--window-title=a=b"]).windowTitle == "a=b")
+}
+
 @Test func streamCutInsideAPacketIsADisconnect() throws {
     // A header announcing 100 bytes, then only 3 of them: receiveVideo returns as for any
     // disconnect instead of failing.

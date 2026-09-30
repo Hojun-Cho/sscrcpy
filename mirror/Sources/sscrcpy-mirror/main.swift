@@ -9,23 +9,32 @@ nonisolated struct Options {
     var audio = true
     /// Keys reach the device through a UHID keyboard; without it they are ignored.
     var keyboard = false
+    var stayAwake = false
+    var turnScreenOff = false
+    var showTouches = false
+    var alwaysOnTop = false
 
+    /// Reads the flags the app passes, which are all there are: a value always follows "=".
     init(_ arguments: some Sequence<String>) throws {
         for argument in arguments {
             // Split on the byte: as Characters, "=" merges with a combining mark after it.
             let parts = argument.utf8.split(separator: UInt8(ascii: "="), maxSplits: 1, omittingEmptySubsequences: false)
-            let value = parts.count == 2 ? String(decoding: parts[1], as: UTF8.self) : ""
-            switch String(decoding: parts[0], as: UTF8.self) {
-            case "--serial": serial = value
-            case "--window-title": windowTitle = value
-            case "--video-bit-rate": videoBitRate = try positive(value, argument, suffixes: true)
-            case "--max-size": maxSize = try positive(value, argument)
-            case "--max-fps": maxFps = try positive(value, argument)
+            let value = parts.count == 2 ? String(decoding: parts[1], as: UTF8.self) : nil
+            switch (String(decoding: parts[0], as: UTF8.self), value) {
+            case ("--serial", let value?): serial = value
+            case ("--window-title", let value?): windowTitle = value
+            case ("--video-bit-rate", let value?): videoBitRate = try positive(value, argument, suffixes: true)
+            case ("--max-size", let value?): maxSize = try positive(value, argument)
+            case ("--max-fps", let value?): maxFps = try positive(value, argument)
             // Every mouse button reaches the device as itself: the only binding there is.
-            case "--mouse-bind" where value == "++++:++++": break
-            case "--no-audio" where parts.count == 1: audio = false
-            case "--keyboard" where value == "uhid": keyboard = true
-            default: throw Failure("unknown option: \(argument)")
+            case ("--mouse-bind", "++++:++++"): break
+            case ("--keyboard", "uhid"): keyboard = true
+            case ("--no-audio", nil): audio = false
+            case ("--stay-awake", nil): stayAwake = true
+            case ("--turn-screen-off", nil): turnScreenOff = true
+            case ("--show-touches", nil): showTouches = true
+            case ("--always-on-top", nil): alwaysOnTop = true
+            default: throw Failure("invalid option: \(argument)")
             }
         }
         guard !serial.isEmpty else { throw Failure("--serial is required") }
@@ -46,31 +55,43 @@ nonisolated func positive(_ value: String, _ argument: String, suffixes: Bool = 
     return n * multiplier
 }
 
+/// Ends the program, and first its adb processes, which would outlive it: the server's shell
+/// and, while connecting, the adb command running. They are the only processes it starts, two
+/// at most. The sockets close at exit, which ends the server; its cleanup process then restores
+/// the device.
+func quit(_ status: Int32) -> Never {
+    var children = [pid_t](repeating: 0, count: 8)
+    let count = proc_listchildpids(getpid(), &children, Int32(children.count * MemoryLayout<pid_t>.size))
+    for child in children.prefix(Int(max(count, 0))) {
+        kill(child, SIGTERM)
+    }
+    exit(status)
+}
+
 func fail(_ error: Error) -> Never {
     FileHandle.standardError.write(Data("ERROR: \(error.localizedDescription)\n".utf8))
-    exit(1)
+    quit(1)
 }
 
 let options: Options
 do { options = try Options(CommandLine.arguments.dropFirst()) } catch { fail(error) }
-guard let adbPath = ProcessInfo.processInfo.environment["ADB"] else {
-    fail(Failure("ADB must be set to the path of adb"))
+guard let adbPath = ProcessInfo.processInfo.environment["ADB"], adbPath.hasPrefix("/") else {
+    fail(Failure("ADB must be set to the absolute path of adb"))
+}
+let adb = ADB(executable: URL(fileURLWithPath: adbPath), serial: options.serial)
+
+// The app stops mirroring with SIGTERM. The source watches before the signal is ignored, so
+// that none is lost.
+let terminate = DispatchSource.makeSignalSource(signal: SIGTERM, queue: .main)
+terminate.setEventHandler { quit(0) }
+terminate.resume()
+signal(SIGTERM, SIG_IGN)
+// Quit, from the menu, the Dock or at logout, ends here too, even while connecting.
+NotificationCenter.default.addObserver(forName: NSApplication.willTerminateNotification, object: nil, queue: .main) { _ in
+    MainActor.assumeIsolated { quit(0) }
 }
 
-let server: Server
-let videoSize: (width: Int, height: Int)
-do {
-    server = try Server.start(ADB(executable: URL(fileURLWithPath: adbPath), serial: options.serial), options)
-} catch {
-    fail(error)
-}
-do {
-    videoSize = try receiveVideoStart(server.video)
-} catch {
-    server.stop()
-    fail(error)
-}
-
+// The app is in the Dock while it connects, as scrcpy is.
 NSApplication.shared.setActivationPolicy(.regular)
 // The menus SDL gives scrcpy, so that Command's keys act on the Mac as in every Mac app, and
 // an Edit menu whose Cut, Copy and Paste go through the device's clipboard.
@@ -89,8 +110,6 @@ do {
     let windowMenu = NSMenu(title: "Window")
     windowMenu.addItem(withTitle: "Close", action: #selector(NSWindow.performClose(_:)), keyEquivalent: "w")
     windowMenu.addItem(withTitle: "Minimize", action: #selector(NSWindow.performMiniaturize(_:)), keyEquivalent: "m")
-    windowMenu.addItem(withTitle: "Enter Full Screen", action: #selector(NSWindow.toggleFullScreen(_:)), keyEquivalent: "f")
-        .keyEquivalentModifierMask = [.control, .command]
     let bar = NSMenu()
     for menu in [appMenu, editMenu, windowMenu] {
         bar.addItem(withTitle: menu.title, action: nil, keyEquivalent: "").submenu = menu
@@ -98,12 +117,19 @@ do {
     NSApp.mainMenu = bar
     NSApp.windowsMenu = windowMenu
 }
-let window = MirrorWindow(
-    server: server,
-    title: options.windowTitle ?? server.deviceName,
-    videoSize: NSSize(width: videoSize.width, height: videoSize.height),
-    keyboard: options.keyboard
-)
-window.start()
-NSApp.activate()
+// Connecting takes seconds: it runs on its own thread, so that SIGTERM ends it.
+var window: MirrorWindow?
+Thread { [adb, options] in
+    do {
+        let server = try Server.start(adb, options)
+        let videoSize = try receiveVideoStart(server.video)
+        DispatchQueue.main.async {
+            window = MirrorWindow(server: server, options: options, videoSize: NSSize(width: videoSize.width, height: videoSize.height))
+            window?.start()
+            NSApp.activate()
+        }
+    } catch {
+        DispatchQueue.main.async { fail(error) }
+    }
+}.start()
 NSApplication.shared.run()
