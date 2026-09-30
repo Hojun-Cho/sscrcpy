@@ -10,7 +10,8 @@ A macOS menu bar app for mirroring Android phones. It runs [scrcpy](https://gith
 ## Install
 
 ```sh
-brew install --cask OWNER/tap/sscrcpy
+brew tap Hojun-Cho/sscrcpy https://github.com/Hojun-Cho/sscrcpy
+brew install --cask sscrcpy
 ```
 
 Apple silicon, macOS 14 or later. It also installs `android-platform-tools`; the app finds `adb` on `PATH` or in `/opt/homebrew/bin`. The app is ad-hoc signed, not notarized, so the cask clears its quarantine flag.
@@ -30,9 +31,9 @@ make install   # install through a Homebrew tap that exists only on this Mac, as
 
 ## Release
 
-Replace `OWNER` in `Casks/sscrcpy.rb` and in this README with your GitHub user name, then:
+This repository is its own Homebrew tap: the cask is `Casks/sscrcpy.rb`.
 
 1. Bump `CFBundleShortVersionString` in `Resources/Info.plist`.
 2. `make dist` builds `dist/sscrcpy-<version>.zip` and writes its version and sha256 into `Casks/sscrcpy.rb`.
-3. Create the GitHub release `v<version>` in `OWNER/sscrcpy` with the zip attached.
-4. Copy `Casks/sscrcpy.rb` into `Casks/` of `OWNER/homebrew-tap` and push.
+3. Commit and push.
+4. Create the GitHub release `v<version>` with that zip attached.
