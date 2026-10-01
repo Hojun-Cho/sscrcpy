@@ -43,11 +43,13 @@ nonisolated func receiveVideoStart(_ fd: Int32) throws -> (width: Int, height: I
 }
 
 /// Decodes and shows the video stream until it ends, which means the device disconnected.
+/// While `visible` says no part of the window shows, frames are decoded but not displayed.
 /// `onSession` receives the video size of each new capture session once its first frame
 /// is on its way to the screen, as scrcpy resizes its window.
 nonisolated func receiveVideo(
     _ fd: Int32,
     to renderer: AVSampleBufferVideoRenderer,
+    visible: () -> Bool,
     onSession: (Int, Int) -> Void
 ) throws {
     var header = [UInt8](repeating: 0, count: 12)
@@ -72,7 +74,7 @@ nonisolated func receiveVideo(
                     return
                 }
                 guard let format else { throw Failure("video frame before the codec configuration") }
-                renderer.enqueue(try makeSample(data, format: format, keyFrame: keyFrame))
+                renderer.enqueue(try makeSample(data, format: format, keyFrame: keyFrame, display: visible()))
             }
             if renderer.status == .failed {
                 throw Failure("video decoding failed: \(renderer.error?.localizedDescription ?? "")")
@@ -129,11 +131,12 @@ nonisolated func makeFormat(_ config: UnsafeRawBufferPointer) throws -> CMVideoF
 }
 
 /// A frame for the display layer: the NAL units get 4-byte lengths instead of start
-/// codes, and the frame is shown as soon as it is decoded.
+/// codes, and the frame is shown as soon as it is decoded, unless `display` is false.
 nonisolated func makeSample(
     _ frame: UnsafeRawBufferPointer,
     format: CMVideoFormatDescription,
-    keyFrame: Bool
+    keyFrame: Bool,
+    display: Bool
 ) throws -> CMSampleBuffer {
     let units = nalUnits(frame)
     var size = units.reduce(0) { $0 + 4 + $1.count }
@@ -165,6 +168,8 @@ nonisolated func makeSample(
     let attachments = CMSampleBufferGetSampleAttachmentsArray(sample, createIfNecessary: true)! as NSArray
     let attachment = attachments[0] as! NSMutableDictionary
     attachment[kCMSampleAttachmentKey_DisplayImmediately] = true
+    // Decoded all the same: the next frame depends on it.
+    if !display { attachment[kCMSampleAttachmentKey_DoNotDisplay] = true }
     if !keyFrame { attachment[kCMSampleAttachmentKey_NotSync] = true }
     return sample
 }

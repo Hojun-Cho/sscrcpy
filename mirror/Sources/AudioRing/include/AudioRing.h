@@ -5,7 +5,7 @@
 #include <stdbool.h>
 #include <stdint.h>
 
-/// Decoded audio on its way from the receiving thread, which writes it, to the output unit,
+/// Audio on its way from the receiving thread, which writes it, to the output unit,
 /// which plays it: the buffer of scrcpy's audio regulator and the part of the regulator that
 /// runs on the audio thread (audio_regulator.c). It is in C because Swift is not supported on
 /// audio realtime threads. One writer, one reader and no lock: only the reader moves the read

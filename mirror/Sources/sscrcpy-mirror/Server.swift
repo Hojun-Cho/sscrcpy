@@ -114,7 +114,10 @@ nonisolated struct Server {
     /// The server's parameters for the options (Options.java).
     static func parameters(_ options: Options) -> [String] {
         var parameters = ["video_bit_rate=\(options.videoBitRate)"]
-        if !options.audio { parameters.append("audio=false") }
+        // Raw PCM rather than the server's default Opus: encoding Opus took the phone about 35
+        // points of a core (its server and media.swcodec), PCM needs no decoder here, and it
+        // costs 1.5 Mbit/s instead of 128 kbit/s.
+        parameters.append(options.audio ? "audio_codec=raw" : "audio=false")
         if options.maxSize > 0 { parameters.append("max_size=\(options.maxSize)") }
         if options.maxFps > 0 { parameters.append("max_fps=\(options.maxFps)") }
         // The server changes these settings, and its cleanup process restores them when it ends.

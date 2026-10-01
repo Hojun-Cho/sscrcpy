@@ -49,8 +49,8 @@ func hex(_ s: String) -> [UInt8] {
 @Test func sampleHasLengthPrefixedUnits() throws {
     let format = try config.withUnsafeBytes { try makeFormat($0) }
     let frame: [UInt8] = [0, 0, 0, 1, 0x06, 0xAA, 0, 0, 1, 0x65, 0xBB, 0xCC]
-    for keyFrame in [true, false] {
-        let sample = try frame.withUnsafeBytes { try makeSample($0, format: format, keyFrame: keyFrame) }
+    for (keyFrame, display) in [(true, true), (false, true), (false, false)] {
+        let sample = try frame.withUnsafeBytes { try makeSample($0, format: format, keyFrame: keyFrame, display: display) }
 
         let block = try #require(CMSampleBufferGetDataBuffer(sample))
         var bytes = [UInt8](repeating: 0, count: CMBlockBufferGetDataLength(block))
@@ -61,6 +61,8 @@ func hex(_ s: String) -> [UInt8] {
         let attachment = attachments[0] as! NSDictionary
         #expect(attachment[kCMSampleAttachmentKey_DisplayImmediately] as? Bool == true)
         #expect((attachment[kCMSampleAttachmentKey_NotSync] as? Bool ?? false) == !keyFrame)
+        // While the window does not show, frames are decoded but not displayed.
+        #expect((attachment[kCMSampleAttachmentKey_DoNotDisplay] as? Bool ?? false) == !display)
     }
 }
 
@@ -108,7 +110,7 @@ let landscape = [
     let layer = AVSampleBufferDisplayLayer()
     var sessions: [[Int]] = []
     try withExtendedLifetime(layer) {
-        try receiveVideo(fd, to: layer.sampleBufferRenderer) { sessions.append([$0, $1]) }
+        try receiveVideo(fd, to: layer.sampleBufferRenderer, visible: { true }) { sessions.append([$0, $1]) }
     }
     #expect(sessions == [[16, 32], [32, 16]])
     #expect(layer.sampleBufferRenderer.status != .failed)
@@ -161,9 +163,9 @@ let landscape = [
         "video_bit_rate=8000000", "audio=false", "max_size=1024", "max_fps=60",
         "stay_awake=true", "show_touches=true", "keep_active=true",
     ])
-    #expect(Server.parameters(try Options(["--serial=abc"])) == ["video_bit_rate=8000000"])
-    #expect(Server.parameters(try Options(["--serial=abc", "--turn-screen-off"])) == ["video_bit_rate=8000000", "keep_active=true"])
-    #expect(Server.parameters(try Options(["--serial=abc", "--show-touches"])) == ["video_bit_rate=8000000", "show_touches=true"])
+    #expect(Server.parameters(try Options(["--serial=abc"])) == ["video_bit_rate=8000000", "audio_codec=raw"])
+    #expect(Server.parameters(try Options(["--serial=abc", "--turn-screen-off"])) == ["video_bit_rate=8000000", "audio_codec=raw", "keep_active=true"])
+    #expect(Server.parameters(try Options(["--serial=abc", "--show-touches"])) == ["video_bit_rate=8000000", "audio_codec=raw", "show_touches=true"])
 }
 
 @Test func streamCutInsideAPacketIsADisconnect() throws {
@@ -171,7 +173,7 @@ let landscape = [
     // disconnect instead of failing.
     let fd = try socket(sending: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 100, 0, 0, 1])
     defer { close(fd) }
-    try receiveVideo(fd, to: AVSampleBufferVideoRenderer()) { _, _ in }
+    try receiveVideo(fd, to: AVSampleBufferVideoRenderer(), visible: { true }) { _, _ in }
 }
 
 /// A socket that yields `bytes`, then the end of the stream.

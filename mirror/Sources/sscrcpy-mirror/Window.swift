@@ -1,5 +1,6 @@
 import AppKit
 import AVFoundation
+import os
 
 /// The window showing the device screen. It keeps the video's aspect ratio, follows
 /// rotation, passes the mouse and the keyboard to the device, shares the clipboard with it,
@@ -14,6 +15,8 @@ final class MirrorWindow {
     private var tickAt: Double?
     private let window: NSWindow
     private let layer = AVSampleBufferDisplayLayer()
+    /// Whether any part of the window shows (occlusionState), read by the video thread.
+    private let visible = OSAllocatedUnfairLock(initialState: true)
     private var videoSize: NSSize
     /// Mouse buttons held, as Android's button bits.
     private var buttons: UInt32 = 0
@@ -29,6 +32,16 @@ final class MirrorWindow {
         keyboard = options.keyboard ? HIDKeyboard() : nil
         turnScreenOff = options.turnScreenOff
         layer.backgroundColor = .black
+        // Frames are shown as they arrive (DisplayImmediately), so the layer needs no running
+        // clock. On the host clock, its default, WindowServer cost about 6 points of a core more
+        // with a still phone screen (a frame every 100 ms), 5 at 30 fps and 3 at 60 fps, measured;
+        // the layer is probably checked at every refresh of the display. A new timebase stays at
+        // rate zero. The price, at 60 fps: of two frames that arrive within one refresh only the
+        // newer is shown, as in scrcpy, about 43 frames a second shown instead of 45. Apple's
+        // header calls this pairing "not recommended"; checked on macOS 26.
+        var timebase: CMTimebase?
+        CMTimebaseCreateWithSourceClock(allocator: nil, sourceClock: CMClockGetHostTimeClock(), timebaseOut: &timebase)
+        layer.controlTimebase = timebase!
         let view = InputView()
         view.layer = layer
         view.wantsLayer = true
@@ -67,6 +80,15 @@ final class MirrorWindow {
         center.addObserver(forName: NSWindow.willCloseNotification, object: window, queue: .main) { [self] _ in
             MainActor.assumeIsolated { end() }
         }
+        // While no part of the window shows (minimized, covered, on another Space) its video is decoded
+        // but not displayed: minimized, it still cost WindowServer about 8 points of a core at 60 fps,
+        // and this process 2 (measured).
+        center.addObserver(forName: NSWindow.didChangeOcclusionStateNotification, object: window, queue: .main) { [self] _ in
+            MainActor.assumeIsolated {
+                let shows = window.occlusionState.contains(.visible)
+                visible.withLock { $0 = shows }
+            }
+        }
         // Key releases go to another window from now on.
         center.addObserver(forName: NSWindow.didResignKeyNotification, object: window, queue: .main) { [self] _ in
             MainActor.assumeIsolated { releaseKeys() }
@@ -93,8 +115,9 @@ final class MirrorWindow {
         // The renderer, unlike the layer, accepts frames from any thread.
         nonisolated(unsafe) let renderer = layer.sampleBufferRenderer
         let video = server.video
+        let visible = visible
         startReader { [self] in
-            try receiveVideo(video, to: renderer) { width, height in
+            try receiveVideo(video, to: renderer, visible: { visible.withLock { $0 } }) { width, height in
                 DispatchQueue.main.async { self.resize(to: NSSize(width: width, height: height)) }
             }
         }

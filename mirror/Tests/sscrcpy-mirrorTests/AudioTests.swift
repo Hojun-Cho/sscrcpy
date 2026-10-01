@@ -206,34 +206,40 @@ func play(_ regulator: AudioRegulator, down level: Int, underflow: Int = 0) thro
     #expect(abs(Int(audio_ring_level(regulator.ring)) - target) <= 1)
 }
 
-// Three Opus packets as the device sends them (CELT, fullband, 20 ms, stereo), of 1 kHz on the
-// left and 2 kHz on the right (ffmpeg's libopus, 32 kbps).
-let tonePackets = [
-    hex("fc9fda3f6b9e52ee68b8ec3ca903806fd762024fe752cc819d2a0b57d0b7f33d3a0e4cc76057e2435b524c4ce2799759a5fcbca8ff717f1bca1695b889a5e45c44f191680f5c685559789bacd47ff0f6c17f550642c02e2beb8ec0103c0068000010040fdd449d1dc5f5c68c16b1"),
-    hex("fc9e8ed779b92b3be2c44f3c80e5e3594b1d982643429612b3b67f4a0c221bd8419ba56aeb1cb1cb1cb1cb91f15723e2ae47c4eae49af8e65cf2afbaf3b62898b2c7fedc1d54241613195b6a3dc675050703eb4fc470bb610abe30eaab7d4dffd08a6dd17892f8b26e38f9ae492c671cd37f5ff3b7cfe144851b5db4965db070d6f10289828bbf4c28156ee5b568a20f59a527f60540475a2568515793f8dd4e8947857ca006c2b8e532ada7b33afd9fc4cfb036ab4bf19550696ed1"),
-    hex("fc9cf35e3d8a766171fb225c904a8e69ce0e39e9cac86dac35fa30f1da7996e6292e22e22e2346f3668de6cd1bcd389149f121e62cff5c54d47ba05496b598ac9d697a0e17c67aec053aabe3044afe38f14d41d8697c0f246335bebf0beb2d183945b587330002c1627738f11b3fa7923ba48eef0309b2428dab3686cdb070ddca984f9c9f84f37ec9fe4fd95f0b5cac5dd56a93a566df6df113dfbf9b334d708d707b1e32dace84f7eaed611e901dade72b6f2688cad1"),
-]
-
-@Test func decodesOpusIntoOneBufferPerChannel() throws {
-    let decoder = try OpusDecoder()
-    let counts = try tonePackets.map { packet in try packet.withUnsafeBytes { try decoder.decode($0) } }
-    // The decoder drops the first 2.5 ms; then each packet is 20 ms.
-    #expect(counts == [840, 960, 960])
-    func crossings(_ samples: UnsafeMutablePointer<Float>) -> Int {
-        (1 ..< 960).count { (samples[$0 - 1] < 0) != (samples[$0] < 0) }
+@Test func regulatorRendersFullPacketsAtTheSlowestRate() throws {
+    // Packets of 1024 frames, the most the device sends. Once playing, the output stalls: the
+    // drops take the average down, the regulator slows by the full 2%, and each packet then
+    // renders to about 1045 frames, within the varispeed's 1156 per call.
+    let regulator = try AudioRegulator()
+    let sine = (0 ..< 1024).map { sin(Float($0) * 2 * .pi / 48) / 2 }
+    for k in 0 ..< 100 {
+        if k == 5 { _ = pull(regulator.ring, Int(audio_ring_level(regulator.ring))) }
+        try regulator.push(sine, sine, count: 1024, pts: 1_000_000 + Int64(k) * 21_333)
     }
-    // 20 periods on the left, 40 on the right.
-    #expect((39 ... 41).contains(crossings(decoder.left)))
-    #expect((79 ... 81).contains(crossings(decoder.right)))
-    // A packet that is not audio, here the configuration, decodes to nothing: an error.
-    let head = hex("4f707573486561640102380180bb0000000000")
-    #expect(throws: Failure.self) { try head.withUnsafeBytes { try decoder.decode($0) } }
+    #expect(regulator.rate < 0.981)
+}
+
+@Test func splitsSixteenBitStereoFrames() {
+    // Little-endian, left then right: 0 and -32768, 16384 and 32767, -1 and 1.
+    let data: [UInt8] = [0x00, 0x00, 0x00, 0x80, 0x00, 0x40, 0xff, 0x7f, 0xff, 0xff, 0x01, 0x00]
+    var left = [Float](repeating: .nan, count: 3)
+    var right = left
+    let count = data.withUnsafeBytes { bytes in
+        left.withUnsafeMutableBufferPointer { l in
+            right.withUnsafeMutableBufferPointer { r in splitFrames(bytes, l.baseAddress!, r.baseAddress!) }
+        }
+    }
+    #expect(count == 3)
+    #expect(left == [0, 0.5, -1 / 32768])
+    #expect(right == [-1, 32767 / 32768, 1 / 32768])
 }
 
 /// Tests never start the Mac's audio output.
 func noOutput(_ ring: OpaquePointer) {
     Issue.record("audio output started")
 }
+
+let rawCodec: [UInt8] = [0, 0x72, 0x61, 0x77]
 
 @Test func audioStreamStart() throws {
     // A device that cannot capture audio says so, then sends nothing more until it
@@ -243,30 +249,47 @@ func noOutput(_ ring: OpaquePointer) {
     try receiveAudio(fd, play: noOutput)
     var byte: UInt8 = 0
     #expect(recv(fd, &byte, 1, MSG_DONTWAIT) == 0)
-    #expect(throws: Failure.self) { try receiveAudio(try socket(sending: [0, 0, 0, 1]), play: noOutput) }
+    // Only raw plays: the server's default Opus, like AAC, is never asked for.
+    #expect(throws: Failure.self) { try receiveAudio(try socket(sending: Array("opus".utf8)), play: noOutput) }
     #expect(throws: Failure.self) { try receiveAudio(try socket(sending: [0, 0x61, 0x61, 0x63]), play: noOutput) }
     // Disconnected before the codec.
-    try receiveAudio(try socket(sending: [0x6f, 0x70]), play: noOutput)
+    try receiveAudio(try socket(sending: [0, 0x72]), play: noOutput)
+}
+
+@Test func audioStreamKeepsTheChannels() throws {
+    // Left at 0.5, right at -0.25. The second packet comes after a gap of more than 100 ms, so
+    // the regulator fills the ring with silence up to its target and the ring plays. (The stream
+    // must fit the socket pair's buffer, 8 KB.)
+    func packet(pts: Int) -> [UInt8] {
+        [0, 0, 0, 0] + [24, 16, 8, 0].map { UInt8(truncatingIfNeeded: pts >> $0) } + [0, 0, 0x08, 0x00]
+            + Array([[UInt8]](repeating: [0x00, 0x40, 0x00, 0xe0], count: 512).joined())
+    }
+    var ring: OpaquePointer?
+    try receiveAudio(try socket(sending: rawCodec + packet(pts: 0) + packet(pts: 200_000))) { ring = $0 }
+    let (left, right) = pull(try #require(ring), Int(audio_ring_level(ring!)))
+    #expect(left.suffix(400).allSatisfy { abs($0 - 0.5) < 0.005 })
+    #expect(right.suffix(400).allSatisfy { abs($0 + 0.25) < 0.005 })
 }
 
 @Test func audioStreamPackets() throws {
-    var stream = Array("opus".utf8)
-    func packet(config: Bool, pts: Int, _ payload: [UInt8]) {
-        stream += [config ? 0x40 : 0, 0, 0, 0] + [24, 16, 8, 0].map { UInt8(truncatingIfNeeded: pts >> $0) }
-        stream += [0, 0, UInt8(payload.count >> 8), UInt8(truncatingIfNeeded: payload.count)] + payload
+    func packet(config: Bool = false, pts: Int = 0, size: Int) -> [UInt8] {
+        [config ? 0x40 : 0, 0, 0, 0] + [24, 16, 8, 0].map { UInt8(truncatingIfNeeded: pts >> $0) }
+            + [0, 0, UInt8(size >> 8), UInt8(truncatingIfNeeded: size)] + [UInt8](repeating: 0, count: size)
     }
-    // The configuration is skipped, the packets are played, and a packet cut short is a
-    // disconnect.
-    packet(config: true, pts: 0, hex("4f707573486561640102380180bb0000000000"))
-    for (k, p) in tonePackets.enumerated() { packet(config: false, pts: k * 20_000, p) }
+    // The packets are played, and a packet cut short is a disconnect. (The whole stream must fit
+    // the socket pair's buffer, 8 KB.)
+    var stream = rawCodec + packet(pts: 0, size: 4096) + packet(pts: 21_333, size: 1024) + packet(pts: 26_666, size: 4)
     stream += [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 100, 1, 2, 3]
     var ring: OpaquePointer?
     try receiveAudio(try socket(sending: stream)) { ring = $0 }
-    // 840 + 960 + 960 frames, less the one the varispeed keeps.
-    #expect(audio_ring_level(try #require(ring)) == 2759)
-    // An empty packet is invalid.
-    #expect(throws: Failure.self) {
-        try receiveAudio(try socket(sending: Array("opus".utf8) + [UInt8](repeating: 0, count: 12)), play: { _ in })
+    // 1024 + 256 + 1 frames, less the one the varispeed keeps.
+    #expect(audio_ring_level(try #require(ring)) == 1280)
+    // Invalid: an empty packet, half a frame over, more than one read of the capture, and a
+    // configuration packet, which raw audio has none of.
+    for (config, size) in [(false, 0), (false, 6), (false, 4100), (true, 4)] {
+        #expect(throws: Failure.self) {
+            try receiveAudio(try socket(sending: rawCodec + packet(config: config, size: size)), play: { _ in })
+        }
     }
 }
 

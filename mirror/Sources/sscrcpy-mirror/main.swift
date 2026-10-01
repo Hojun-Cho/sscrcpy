@@ -71,6 +71,14 @@ func fail(_ error: Error) -> Never {
     quit(1)
 }
 
+// The hardware decoder runs in this process. By default VideoToolbox runs it in
+// VTDecoderXPCService and passes every frame over XPC, which cost this Mac about 6 points of a
+// core at 60 fps, half of what the client and the decoder cost together (measured). The
+// preference (com.apple.coremedia's VTDecodeServer, read from the argument domain, which this
+// program does not otherwise use) is undocumented: if a macOS ignores it, decoding goes back to
+// the service. It must be set before anything starts a decoder.
+UserDefaults.standard.setVolatileDomain(["VTDecodeServer": "never"], forName: UserDefaults.argumentDomain)
+
 let options: Options
 do { options = try Options(CommandLine.arguments.dropFirst()) } catch { fail(error) }
 guard let adbPath = ProcessInfo.processInfo.environment["ADB"], adbPath.hasPrefix("/") else {
