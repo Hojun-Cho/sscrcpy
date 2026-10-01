@@ -1,6 +1,6 @@
 cask "sscrcpy" do
   version "0.1.0"
-  sha256 "e2f7e174c7cf4e11420e99d3c3240da1fe9f1b35f41331a4316c9ece03847721"
+  sha256 "b9793a3c5016fd24687e24f616a5952369d360588fca3282c3a67ea9dfc8235d"
 
   url "https://github.com/Hojun-Cho/sscrcpy/releases/download/v#{version}/sscrcpy-#{version}.zip"
   name "sscrcpy"
